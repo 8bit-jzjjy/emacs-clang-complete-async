@@ -23,7 +23,6 @@
 ;; You should have received a copy of the GNU General Public License
 ;; along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
-
 ;;; Commentary:
 
 ;; Auto Completion source for clang.
@@ -32,12 +31,10 @@
 
 ;;; Code:
 
-
 (provide 'auto-complete-clang-async)
-(eval-when-compile (require' cl))
+(eval-when-compile (require 'cl))
 (require 'auto-complete)
 (require 'flymake)
-
 
 (defcustom ac-clang-complete-executable
   (executable-find "clang-complete")
@@ -65,7 +62,6 @@ This variable will typically contain include paths, e.g., (\"-I~/MyProject\" \"-
 
 (defun ac-clang-set-cflags-from-shell-command ()
   "Set `ac-clang-cflags' to a shell command's output.
-
 set new cflags for ac-clang from shell command output"
   (interactive)
   (setq ac-clang-cflags
@@ -97,7 +93,6 @@ set new cflags for ac-clang from shell command output"
    (t
     (setq ac-clang-prefix-header prefix-header))))
 
-
 (defconst ac-clang-completion-pattern
   "^COMPLETION: \\(%s[^\s\n:]*\\)\\(?: : \\)*\\(.*$\\)")
 
@@ -111,7 +106,6 @@ set new cflags for ac-clang from shell command output"
       (setq match (match-string-no-properties 1))
       (unless (string= "Pattern" match)
         (setq detailed-info (match-string-no-properties 2))
-
         (if (string= match prev-match)
             (progn
               (when detailed-info
@@ -129,7 +123,6 @@ set new cflags for ac-clang from shell command output"
           (push match lines))))
     lines))
 
-
 (defconst ac-clang-error-buffer-name "*clang error*")
 
 (defun ac-clang-handle-error (res args)
@@ -143,7 +136,6 @@ set new cflags for ac-clang from shell command output"
                 ;; Warn the user more agressively if no match was found.
                 (message "clang failed with error %d:\n%s" res cmd)
                 (buffer-string))))
-
     (with-current-buffer buf
       (let ((inhibit-read-only t))
         (erase-buffer)
@@ -166,13 +158,14 @@ set new cflags for ac-clang from shell command output"
       ;; Still try to get any useful input.
       (ac-clang-parse-output prefix))))
 
-
 (defsubst ac-clang-create-position-string (pos)
   (save-excursion
     (goto-char pos)
     (format "row:%d\ncolumn:%d\n"
             (line-number-at-pos)
-            (1+ (- (point) (line-beginning-position))))))
+	    (1+ (length (encode-coding-string
+			 (buffer-substring (line-beginning-position) (point))
+			 buffer-file-coding-system))))))
 
 (defsubst ac-clang-lang-option ()
   (or (and ac-clang-lang-option-function
@@ -196,7 +189,6 @@ set new cflags for ac-clang from shell command output"
           (when (stringp ac-clang-prefix-header)
             (list "-include-pch" (expand-file-name ac-clang-prefix-header)))))
 
-
 (defsubst ac-clang-clean-document (s)
   (when s
     (setq s (replace-regexp-in-string "<#\\|#>\\|\\[#" "" s))
@@ -211,7 +203,6 @@ set new cflags for ac-clang from shell command output"
   ;; (popup-item-property item 'ac-clang-help)
   )
 
-
 (defface ac-clang-candidate-face
   '((t (:background "lightgray" :foreground "navy")))
   "Face for clang candidate"
@@ -225,7 +216,6 @@ set new cflags for ac-clang from shell command output"
 (defsubst ac-clang-in-string/comment ()
   "Return non-nil if point is in a literal (a comment or string)."
   (nth 8 (syntax-ppss)))
-
 
 (defvar ac-clang-template-start-point nil)
 (defvar ac-clang-template-candidates (list "ok" "no" "yes:)"))
@@ -320,7 +310,6 @@ set new cflags for ac-clang from shell command output"
           (t
            sl))))
 
-
 (defun ac-clang-template-candidate ()
   ac-clang-template-candidates)
 
@@ -376,10 +365,8 @@ set new cflags for ac-clang from shell command output"
                      (t
                       (message "Dude! You are too out! Please install a yasnippet or a snippet script:)")))))))))
 
-
 (defun ac-clang-template-prefix ()
   ac-clang-template-start-point)
-
 
 ;; This source shall only be used internally.
 (ac-define-source clang-template
@@ -390,7 +377,6 @@ set new cflags for ac-clang from shell command output"
     (document . ac-clang-document)
     (cache)
     (symbol . "t")))
-
 
 ;;;
 ;;; Rest of the file is related to async.
@@ -409,62 +395,80 @@ set new cflags for ac-clang from shell command output"
 ;;; Functions to speak with the clang-complete process
 ;;;
 
+(defun ac-clang-process-send-string (process string)
+  (let ((coding-system-for-write 'binary))
+    (process-send-string process string))
+  (let ((log-buffer (get-buffer "*clang-log*")))
+    (when log-buffer
+      (with-current-buffer log-buffer
+	(goto-char (point-max))
+	(pp (encode-coding-string string 'binary) log-buffer)
+	(insert "\n")))))
+
 (defun ac-clang-send-source-code (proc)
   (save-restriction
     (widen)
-    (process-send-string
-     proc (format "source_length:%d\n"
-                  (length (string-as-unibyte   ; fix non-ascii character problem
-                           (buffer-substring-no-properties (point-min) (point-max)))
-                          )))
-    (process-send-string proc (buffer-substring-no-properties (point-min) (point-max)))
-    (process-send-string proc "\n\n")))
+    (let ((cs buffer-file-coding-system)
+	  (source-buf (current-buffer)))
+      (with-temp-buffer
+	(set-buffer-multibyte nil)
+	(let ((temp-buf (current-buffer)))
+	  (with-current-buffer source-buf
+	    (encode-coding-region (point-min) (point-max) cs temp-buf)))
+	(ac-clang-process-send-string
+	 proc
+	 (format "source_length:%d\n" (buffer-size)))
+	(let ((coding-system-for-write 'binary))
+	  (process-send-region proc (point-min) (point-max))))
+	(ac-clang-process-send-string proc "\n\n"))))
 
 (defun ac-clang-send-reparse-request (proc)
   (if (eq (process-status proc) 'run)
       (save-restriction
-    (widen)
-    (process-send-string proc "SOURCEFILE\n")
-    (ac-clang-send-source-code proc)
-    (process-send-string proc "REPARSE\n\n"))))
+	(widen)
+	(ac-clang-process-send-string proc "SOURCEFILE\n")
+	(ac-clang-send-source-code proc)
+	(ac-clang-process-send-string proc "REPARSE\n\n"))))
 
 (defun ac-clang-send-completion-request (proc)
   (save-restriction
     (widen)
-    (process-send-string proc "COMPLETION\n")
-    (process-send-string proc (ac-clang-create-position-string (- (point) (length ac-prefix))))
+    (ac-clang-process-send-string proc "COMPLETION\n")
+    (ac-clang-process-send-string proc (ac-clang-create-position-string
+					(- (point) (length ac-prefix))))
     (ac-clang-send-source-code proc)))
 
 (defun ac-clang-send-syntaxcheck-request (proc)
   (save-restriction
     (widen)
-    (process-send-string proc "SYNTAXCHECK\n")
+    (ac-clang-process-send-string proc "SYNTAXCHECK\n")
     (ac-clang-send-source-code proc)))
 
 (defun ac-clang-send-cmdline-args (proc)
   ;; send message head and num_args
-  (process-send-string proc "CMDLINEARGS\n")
-  (process-send-string
+  (ac-clang-process-send-string proc "CMDLINEARGS\n")
+  (ac-clang-process-send-string
    proc (format "num_args:%d\n" (length (ac-clang-build-complete-args))))
-
   ;; send arguments
   (mapc
    (lambda (arg)
-     (process-send-string proc (format "%s " arg)))
+     (ac-clang-process-send-string
+      proc
+      (encode-coding-string (format "%s " arg)
+			    (or file-name-coding-system
+				default-file-name-coding-system))))
    (ac-clang-build-complete-args))
-  (process-send-string proc "\n"))
+  (ac-clang-process-send-string proc "\n"))
 
 (defun ac-clang-update-cmdlineargs ()
   (interactive)
   (if (listp ac-clang-cflags)
-         (ac-clang-send-cmdline-args ac-clang-completion-process)
-         (message "`ac-clang-cflags' should be a list of strings")))
+      (ac-clang-send-cmdline-args ac-clang-completion-process)
+    (message "`ac-clang-cflags' should be a list of strings")))
 
 (defun ac-clang-send-shutdown-command (proc)
-  (if (eq (process-status proc) 'run)
-    (process-send-string proc "SHUTDOWN\n"))
-  )
-
+  (when (eq (process-status proc) 'run)
+    (ac-clang-process-send-string proc "SHUTDOWN\n")))
 
 (defun ac-clang-append-process-output-to-process-buffer (process output)
   "Append process output to the process buffer."
@@ -475,7 +479,6 @@ set new cflags for ac-clang from shell command output"
       (insert output)
       (set-marker (process-mark process) (point)))
     (goto-char (process-mark process))))
-
 
 ;;
 ;;  Receive server responses (completion candidates) and fire auto-complete
@@ -492,7 +495,6 @@ set new cflags for ac-clang from shell command output"
          (setq ac-clang-status 'idle)
          (ac-start)
          (ac-update))
-
         (otherwise
          (setq ac-clang-current-candidate (ac-clang-parse-completion-results proc))
          ;; (message "ac-clang results arrived")
@@ -501,41 +503,35 @@ set new cflags for ac-clang from shell command output"
          (ac-update)
          (setq ac-clang-status 'idle)))))
 
-
 (defun ac-clang-candidate ()
   (case ac-clang-status
     (idle
      ;; (message "ac-clang-candidate triggered - fetching candidates...")
      (setq ac-clang-saved-prefix ac-prefix)
-
-     ;; NOTE: although auto-complete would filter the result for us, but when there's
-     ;;       a HUGE number of candidates avaliable it would cause auto-complete to
-     ;;       block. So we filter it uncompletely here, then let auto-complete filter
-     ;;       the rest later, this would ease the feeling of being "stalled" at some degree.
-
-     ;; (message "saved prefix: %s" ac-clang-saved-prefix)
+     ;; NOTE: although auto-complete would filter the result for us,
+     ;;       but when there's a HUGE number of candidates avaliable
+     ;;       it would cause auto-complete to block. So we filter it
+     ;;       uncompletely here, then let auto-complete filter the
+     ;;       rest later, this would ease the feeling of being
+     ;;       "stalled" at some degree.
+;     (message "saved prefix: %s" ac-clang-saved-prefix)
      (with-current-buffer (process-buffer ac-clang-completion-process)
        (erase-buffer))
      (setq ac-clang-status 'wait)
      (setq ac-clang-current-candidate nil)
-
      ;; send completion request
      (ac-clang-send-completion-request ac-clang-completion-process)
      ac-clang-current-candidate)
-
     (wait
      ;; (message "ac-clang-candidate triggered - wait")
      ac-clang-current-candidate)
-
     (acknowledged
      ;; (message "ac-clang-candidate triggered - ack")
      (setq ac-clang-status 'idle)
      ac-clang-current-candidate)
-
     (preempted
      ;; (message "clang-async is preempted by a critical request")
      nil)))
-
 
 ;; Syntax checking with flymake
 
@@ -569,8 +565,6 @@ set new cflags for ac-clang from shell command output"
     (set-process-filter ac-clang-completion-process 'ac-clang-flymake-process-filter)
     (ac-clang-send-syntaxcheck-request ac-clang-completion-process)))
 
-
-
 (defun ac-clang-shutdown-process ()
   (if ac-clang-completion-process
       (ac-clang-send-shutdown-command ac-clang-completion-process)))
@@ -579,15 +573,11 @@ set new cflags for ac-clang from shell command output"
   (if ac-clang-completion-process
       (ac-clang-send-reparse-request ac-clang-completion-process)))
 
-
-
 (defun ac-clang-async-autocomplete-autotrigger ()
   (interactive)
   (if ac-clang-async-do-autocompletion-automatically
       (ac-clang-async-preemptive)
-      (self-insert-command 1)))
-
-
+    (self-insert-command 1)))
 
 (defun ac-clang-async-preemptive ()
   (interactive)
@@ -599,7 +589,7 @@ set new cflags for ac-clang from shell command output"
 (defun ac-clang-launch-completion-process ()
   (let ((filename (buffer-file-name)))
     (if filename
-        (ac-clang-launch-completion-process-with-file filename))))
+	(ac-clang-launch-completion-process-with-file filename))))
 
 (defun ac-clang-launch-completion-process-with-file (filename)
   (setq ac-clang-completion-process
@@ -609,20 +599,23 @@ set new cflags for ac-clang from shell command output"
                  ac-clang-complete-executable
                  (append (ac-clang-build-complete-args)
                          (list filename)))))
-
+  (set-process-coding-system
+   ac-clang-completion-process
+   (coding-system-change-eol-conversion buffer-file-coding-system 'unix)
+   'binary)
   (set-process-filter ac-clang-completion-process 'ac-clang-filter-output)
   (set-process-query-on-exit-flag ac-clang-completion-process nil)
   ;; Pre-parse source code.
   (ac-clang-send-reparse-request ac-clang-completion-process)
-
   (add-hook 'kill-buffer-hook 'ac-clang-shutdown-process nil t)
-  (add-hook 'before-revert-hook 'ac-clang-shutdown-process nil t)
-  (add-hook 'before-save-hook 'ac-clang-reparse-buffer)
-
+  (if (eq system-type 'windows-nt)
+      (progn
+	(add-hook 'before-save-hook 'ac-clang-shutdown-process)
+	(add-hook 'after-save-hook 'ac-clang-launch-completion-process))
+    (add-hook 'before-save-hook 'ac-clang-reparse-buffer))
   (local-set-key (kbd ".") 'ac-clang-async-autocomplete-autotrigger)
   (local-set-key (kbd ":") 'ac-clang-async-autocomplete-autotrigger)
   (local-set-key (kbd ">") 'ac-clang-async-autocomplete-autotrigger))
-
 
 (ac-define-source clang-async
   '((candidates . ac-clang-candidate)
